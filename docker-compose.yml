@@ -3,17 +3,16 @@ version: '3'
 services:
   cdr-analyzer:
     build: .
+    restart: unless-stopped
     ports:
-      - "8001:8000"
+      - "3001:3001"
     volumes:
       - ./app:/app/app
     environment:
+      - PORT=3001
       - DEBUG=False
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_KEY=${SUPABASE_KEY}
       - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
       - DATABASE_URL=${DATABASE_URL}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
-    restart: unless-stopped
-
-# Hapus service postgres karena kita menggunakan database Supabase
