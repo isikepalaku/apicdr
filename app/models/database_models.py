@@ -43,6 +43,12 @@ class CDRRecord(Base):
     duration = Column(Integer)
     lac_ci = Column(String, nullable=True)
     imei = Column(String, nullable=True, index=True)
+    imei_type = Column(String, nullable=True)
+    imsi = Column(String, nullable=True)
+    sitename = Column(String, nullable=True)
+    direction = Column(String, nullable=True)
+    latitude = Column(String, nullable=True)
+    longitude = Column(String, nullable=True)
     session_id = Column(String, ForeignKey("sessions.id"))
     
     # Relationship

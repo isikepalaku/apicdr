@@ -144,15 +144,25 @@ class SessionManager:
             
             # Tambahkan CDR records ke database
             for _, row in cdr_df.iterrows():
+                # Helper function to safely get values from row
+                def get_value(col: str) -> Optional[str]:
+                    return row[col] if col in row and pd.notna(row[col]) else None
+                
                 cdr_record = CDRRecord(
                     call_type=row["call_type"],
                     anumber=row["anumber"],
                     bnumber=row["bnumber"],
-                    cnumber=row["cnumber"] if "cnumber" in row and pd.notna(row["cnumber"]) else None,
+                    cnumber=get_value("cnumber"),
                     date=row["date"],
                     duration=row["duration"],
-                    lac_ci=row["lac_ci"] if "lac_ci" in row and pd.notna(row["lac_ci"]) else None,
-                    imei=row["imei"] if "imei" in row and pd.notna(row["imei"]) else None,
+                    lac_ci=get_value("lac_ci"),
+                    imei=get_value("imei"),
+                    imei_type=get_value("imei_type"),
+                    imsi=get_value("imsi"),
+                    sitename=get_value("sitename"),
+                    direction=get_value("direction"),
+                    latitude=get_value("latitude"),
+                    longitude=get_value("longitude"),
                     session_id=session_id
                 )
                 db.add(cdr_record)
@@ -199,12 +209,22 @@ class SessionManager:
                     all_numbers.add(record.bnumber)
                     G.add_node(record.bnumber, type="phone", label=record.bnumber)
             
-            # Tambahkan IMEI sebagai node
+            # Tambahkan IMEI sebagai node dengan informasi perangkat
             imei_set = set()
             for record in cdr_records:
                 if record.imei and record.imei != "UN":
                     imei_set.add(record.imei)
-                    G.add_node(record.imei, type="imei", label=f"IMEI: {record.imei}")
+                    label = f"IMEI: {record.imei}"
+                    if record.imei_type:
+                        label += f"\n{record.imei_type}"
+                    if record.imsi:
+                        label += f"\nIMSI: {record.imsi}"
+                    
+                    G.add_node(record.imei,
+                             type="imei",
+                             label=label,
+                             imei_type=record.imei_type,
+                             imsi=record.imsi)
             
             # Tambahkan LAC_CI sebagai node
             lac_ci_set = set()
@@ -243,7 +263,20 @@ class SessionManager:
                 
                 # Tambahkan edge antara nomor telepon dan lokasi
                 if record.lac_ci and record.lac_ci != "UN" and a_num in all_numbers:
-                    G.add_edge(a_num, record.lac_ci, relationship="located_at")
+                    location_id = record.lac_ci
+                    location_label = f"LOC: {record.lac_ci}"
+                    if record.sitename:
+                        location_label += f" ({record.sitename})"
+                    if record.latitude and record.longitude:
+                        location_label += f"\n{record.latitude}, {record.longitude}"
+                    
+                    G.add_node(location_id,
+                              type="location",
+                              label=location_label,
+                              sitename=record.sitename,
+                              latitude=record.latitude,
+                              longitude=record.longitude)
+                    G.add_edge(a_num, location_id, relationship="located_at")
             
             # Simpan graph ke database
             session = db.query(DBSession).filter(DBSession.id == session_id).first()

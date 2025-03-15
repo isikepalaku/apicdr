@@ -12,6 +12,12 @@ class CDRRecord(BaseModel):
     duration: int = Field(..., description="Durasi panggilan dalam detik")
     lac_ci: Optional[str] = Field(None, description="Location Area Code dan Cell ID")
     imei: Optional[str] = Field(None, description="International Mobile Equipment Identity")
+    imei_type: Optional[str] = Field(None, description="Tipe perangkat IMEI")
+    imsi: Optional[str] = Field(None, description="International Mobile Subscriber Identity")
+    sitename: Optional[str] = Field(None, description="Nama lokasi BTS")
+    direction: Optional[str] = Field(None, description="Arah panggilan (incoming/outgoing)")
+    latitude: Optional[str] = Field(None, description="Latitude lokasi")
+    longitude: Optional[str] = Field(None, description="Longitude lokasi")
 
 class CDRUploadResponse(BaseModel):
     """Response untuk upload CDR"""

@@ -19,8 +19,8 @@ class CDRProcessor:
         Detects the CDR file format based on columns
         Returns: 'standard' or 'detailed'
         """
-        columns = set(col.lower() for col in df.columns)
-        if 'a number' in columns and 'calltype' in columns:
+        columns = set(col.lower().strip('% ') for col in df.columns)
+        if any('a number' in col for col in columns) and any('calltype' in col for col in columns):
             return 'detailed'
         return 'standard'
 
@@ -37,16 +37,21 @@ class CDRProcessor:
         """
         Converts detailed CSV format to standard format
         """
+        # Standardize column names first
+        df.columns = [col.lower().strip('% ') for col in df.columns]
+        
         # Create mapping for columns
-        df = df.rename(columns={
-            '% a number': 'anumber',
-            '% b number': 'bnumber',
-            '% c number': 'cnumber',
-            '% calltype': 'call_type',
-            '% duration': 'duration',
-            '% date': 'date',
-            '% time': 'time'
-        })
+        column_mapping = {
+            'a number': 'anumber',
+            'b number': 'bnumber',
+            'c number': 'cnumber',
+            'calltype': 'call_type',
+            'duration': 'duration',
+            'date': 'date',
+            'time': 'time'
+        }
+        
+        df = df.rename(columns=column_mapping)
         
         # Combine date and time
         df['date'] = pd.to_datetime(
@@ -87,23 +92,39 @@ class CDRProcessor:
             except:
                 df = pd.read_csv(io.BytesIO(file_content))
             
+            # Keep original columns for debugging
+            original_columns = list(df.columns)
+            logger.debug(f"Original columns: {original_columns}")
+            
             # Standardize column names
             df.columns = [col.lower().strip('% ') for col in df.columns]
+            logger.debug(f"Standardized columns: {list(df.columns)}")
             
             # Detect and process format
             file_format = CDRProcessor._detect_file_format(df)
+            logger.info(f"Detected file format: {file_format}")
+            
             if file_format == 'detailed':
                 df = CDRProcessor._standardize_detailed_format(df)
+                logger.debug(f"Columns after standardization: {list(df.columns)}")
             
             # Verify required columns
             required_columns = ['call_type', 'anumber', 'bnumber', 'date', 'duration']
             for col in required_columns:
                 if col not in df.columns:
-                    raise ValueError(f"Required column {col} not found in CDR file")
+                    raise ValueError(f"Required column {col} not found in CDR file. Available columns: {list(df.columns)}")
             
             # Handle different date formats
-            if isinstance(df['date'].iloc[0], str):
-                df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+            try:
+                if file_format == 'detailed':
+                    # For detailed format with dd/MMM/yy
+                    df['date'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='%d/%b/%y %H:%M:%S')
+                else:
+                    # For standard format with yyyy-MM-dd HH:mm:ss
+                    df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+            except Exception as e:
+                logger.error(f"Error converting date: {str(e)}")
+                raise ValueError(f"Failed to parse date format. Error: {str(e)}")
             
             # Convert duration to integer, handle colon format
             df['duration'] = df['duration'].astype(str).str.replace(':', '')
