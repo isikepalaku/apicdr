@@ -37,21 +37,50 @@ class CDRProcessor:
         """
         Converts detailed CSV format to standard format
         """
+        logger.info("Starting detailed format standardization")
+        
+        # Log original columns
+        logger.debug(f"Original columns: {list(df.columns)}")
+        
         # Standardize column names first
         df.columns = [col.lower().strip('% ') for col in df.columns]
+        logger.debug(f"Columns after standardization: {list(df.columns)}")
         
-        # Create mapping for columns
+        # Create comprehensive mapping for all possible columns
+        logger.debug("Applying column mapping")
         column_mapping = {
             'a number': 'anumber',
             'b number': 'bnumber',
             'c number': 'cnumber',
             'calltype': 'call_type',
             'duration': 'duration',
-            'date': 'date',
-            'time': 'time'
+            'a imei': 'imei',
+            'b imei': 'b_imei',
+            'a imei type': 'imei_type',
+            'b imei type': 'b_imei_type',
+            'a imsi': 'imsi',
+            'b imsi': 'b_imsi',
+            'a sitename': 'sitename',
+            'b sitename': 'b_sitename',
+            'a lac/cid': 'lac_ci',
+            'b lac/cid': 'b_lac_ci',
+            'direction': 'direction',
+            'a lat': 'latitude',
+            'a long': 'longitude',
+            'b lat': 'b_latitude',
+            'b long': 'b_longitude'
         }
+
+        # Log original columns for debugging
+        logger.debug(f"Original columns before mapping: {list(df.columns)}")
         
+        # Rename columns but keep 'date' and 'time' as is for now
         df = df.rename(columns=column_mapping)
+        
+        # Handle duration - convert : to empty if present
+        if 'duration' in df.columns:
+            df['duration'] = df['duration'].replace(':', '0')
+            df['duration'] = pd.to_numeric(df['duration'], errors='coerce').fillna(0).astype(int)
         
         # Combine date and time
         df['date'] = pd.to_datetime(
@@ -59,9 +88,33 @@ class CDRProcessor:
             format='%d/%b/%y %H:%M:%S'
         )
         
-        # Drop unused columns
-        keep_columns = ['call_type', 'anumber', 'bnumber', 'date', 'duration']
-        df = df[keep_columns]
+        # Handle date before dropping columns
+        try:
+            df['date'] = pd.to_datetime(
+                df['date'] + ' ' + df['time'],
+                format='%d/%b/%y %H:%M:%S',
+                errors='coerce'
+            )
+        except Exception as e:
+            logger.error(f"Error converting date: {str(e)}")
+            logger.error(f"Sample date values: {df['date'].head()}")
+            logger.error(f"Sample time values: {df['time'].head()}")
+            raise ValueError(f"Failed to parse date format in detailed format. Error: {str(e)}")
+
+        # Keep all relevant columns including B-side data
+        keep_columns = [
+            'call_type', 'anumber', 'bnumber', 'date', 'duration',
+            'imei', 'b_imei', 'imei_type', 'b_imei_type',
+            'imsi', 'b_imsi', 'lac_ci', 'b_lac_ci',
+            'sitename', 'b_sitename', 'direction',
+            'latitude', 'longitude', 'b_latitude', 'b_longitude'
+        ]
+        
+        logger.debug(f"Available columns after mapping: {list(df.columns)}")
+        
+        # Only keep columns that exist
+        existing_columns = [col for col in keep_columns if col in df.columns]
+        df = df[existing_columns]
         
         # Clean phone numbers
         df['anumber'] = df['anumber'].str.replace(r'^\+', '', regex=True)
@@ -69,6 +122,8 @@ class CDRProcessor:
 
         # Filter out invalid B numbers
         df = CDRProcessor._filter_invalid_bnumbers(df)
+
+        logger.debug(f"Final columns after standardization: {list(df.columns)}")
         
         return df
     
@@ -114,17 +169,62 @@ class CDRProcessor:
                 if col not in df.columns:
                     raise ValueError(f"Required column {col} not found in CDR file. Available columns: {list(df.columns)}")
             
-            # Handle different date formats
+            # Handle different date formats with improved error handling
             try:
+                logger.debug("Starting date conversion")
+                logger.debug(f"Current date column values: {df['date'].head()}")
+                
                 if file_format == 'detailed':
-                    # For detailed format with dd/MMM/yy
-                    df['date'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='%d/%b/%y %H:%M:%S')
+                    if 'time' not in df.columns:
+                        logger.error("Time column missing in detailed format")
+                        logger.error(f"Available columns: {list(df.columns)}")
+                        raise ValueError("Time column missing in detailed format")
+                    
+                    # Try parsing date and time together
+                    for date_format in ['%d/%b/%y', '%d/%b/%Y']:
+                        try:
+                            logger.debug(f"Attempting date format: {date_format}")
+                            df['parsed_date'] = pd.to_datetime(
+                                df['date'].astype(str) + ' ' + df['time'].astype(str),
+                                format=f'{date_format} %H:%M:%S',
+                                errors='raise'
+                            )
+                            df['date'] = df['parsed_date']
+                            df = df.drop(['parsed_date', 'time'], axis=1, errors='ignore')
+                            logger.info(f"Successfully parsed dates using format: {date_format}")
+                            break
+                        except Exception as format_error:
+                            logger.debug(f"Format {date_format} failed: {str(format_error)}")
+                            continue
+                    
+                    # If no format worked, try one last time with flexible parsing
+                    if 'parsed_date' not in df.columns:
+                        logger.warning("Attempting flexible date parsing")
+                        df['date'] = pd.to_datetime(
+                            df['date'].astype(str) + ' ' + df['time'].astype(str),
+                            errors='coerce'
+                        )
                 else:
-                    # For standard format with yyyy-MM-dd HH:mm:ss
-                    df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+                    # For standard format, try multiple patterns
+                    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+                
+                # Validate results
+                if df['date'].isna().any():
+                    bad_dates = df[df['date'].isna()]
+                    logger.error("Some dates failed to parse:")
+                    logger.error(f"Problem rows:\n{bad_dates[['date', 'time'] if 'time' in bad_dates else ['date']].head()}")
+                    raise ValueError(f"{df['date'].isna().sum()} dates failed to parse. Check logs for details.")
+                
+                logger.info("Date conversion completed successfully")
+                logger.debug(f"Sample converted dates:\n{df['date'].head()}")
+                
             except Exception as e:
-                logger.error(f"Error converting date: {str(e)}")
-                raise ValueError(f"Failed to parse date format. Error: {str(e)}")
+                logger.error(f"Date conversion failed: {str(e)}")
+                if 'date' in df.columns:
+                    logger.error(f"Original date values:\n{df['date'].head()}")
+                if 'time' in df.columns:
+                    logger.error(f"Time values:\n{df['time'].head()}")
+                raise ValueError(f"Date conversion error: {str(e)}")
             
             # Convert duration to integer, handle colon format
             df['duration'] = df['duration'].astype(str).str.replace(':', '')
