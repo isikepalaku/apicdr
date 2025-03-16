@@ -84,9 +84,13 @@ def get_db():
 @handle_db_connection(max_retries=5, retry_delay=2)
 def init_db():
     try:
-        # Buat semua tabel jika belum ada
+        # Drop existing tables first
+        Base.metadata.drop_all(bind=engine)
+        logger.info("Dropped all existing tables")
+        
+        # Create all tables
         Base.metadata.create_all(bind=engine)
-        logger.info("Database initialized successfully")
+        logger.info("Database initialized successfully with new schema")
     except Exception as e:
         logger.error(f"Error initializing database: {str(e)}")
-        raise 
+        raise

@@ -19,9 +19,21 @@ class CDRProcessor:
         Detects the CDR file format based on columns
         Returns: 'standard' or 'detailed'
         """
+        # Convert columns to lowercase and remove % for comparison
         columns = set(col.lower().strip('% ') for col in df.columns)
-        if any('a number' in col for col in columns) and any('calltype' in col for col in columns):
+        
+        # Check for detailed format (A number, B number format)
+        if any('a number' in col for col in columns) and any('b number' in col for col in columns):
             return 'detailed'
+            
+        # Check for standard format (simple column names)
+        if all(col in columns for col in {'anumber', 'bnumber', 'date', 'duration'}):
+            return 'standard'
+            
+        # Default to detailed if we have date and time columns
+        if 'date' in columns and 'time' in columns:
+            return 'detailed'
+            
         return 'standard'
 
     @staticmethod
@@ -42,33 +54,34 @@ class CDRProcessor:
         # Log original columns
         logger.debug(f"Original columns: {list(df.columns)}")
         
-        # Standardize column names first
-        df.columns = [col.lower().strip('% ') for col in df.columns]
-        logger.debug(f"Columns after standardization: {list(df.columns)}")
+        # Log original columns for debugging
+        logger.debug(f"Original columns before standardization: {list(df.columns)}")
         
         # Create comprehensive mapping for all possible columns
         logger.debug("Applying column mapping")
         column_mapping = {
-            'a number': 'anumber',
-            'b number': 'bnumber',
-            'c number': 'cnumber',
-            'calltype': 'call_type',
-            'duration': 'duration',
-            'a imei': 'imei',
-            'b imei': 'b_imei',
-            'a imei type': 'imei_type',
-            'b imei type': 'b_imei_type',
-            'a imsi': 'imsi',
-            'b imsi': 'b_imsi',
-            'a sitename': 'sitename',
-            'b sitename': 'b_sitename',
-            'a lac/cid': 'lac_ci',
-            'b lac/cid': 'b_lac_ci',
-            'direction': 'direction',
-            'a lat': 'latitude',
-            'a long': 'longitude',
-            'b lat': 'b_latitude',
-            'b long': 'b_longitude'
+            '% date': 'date',
+            '% time': 'time',
+            '% duration': 'duration',
+            '% a number': 'anumber',
+            '% a imei': 'imei',
+            '% a imei type': 'imei_type',
+            '% a imsi': 'imsi',
+            '% a lac/cid': 'lac_ci',
+            '% a sitename': 'sitename',
+            '% b number': 'bnumber',
+            '% b imei': 'b_imei',
+            '% b imei type': 'b_imei_type',
+            '% b imsi': 'b_imsi',
+            '% b lac/cid': 'b_lac_ci',
+            '% b sitename': 'b_sitename',
+            '% calltype': 'call_type',
+            '% direction': 'direction',
+            '% c number': 'cnumber',
+            '% a lat': 'latitude',
+            '% a long': 'longitude',
+            '% b lat': 'b_latitude',
+            '% b long': 'b_longitude'
         }
 
         # Log original columns for debugging
@@ -82,25 +95,67 @@ class CDRProcessor:
             df['duration'] = df['duration'].replace(':', '0')
             df['duration'] = pd.to_numeric(df['duration'], errors='coerce').fillna(0).astype(int)
         
-        # Combine date and time
-        df['date'] = pd.to_datetime(
-            df['date'] + ' ' + df['time'],
-            format='%d/%b/%y %H:%M:%S'
-        )
-        
-        # Handle date before dropping columns
+        # Handle date and time
         try:
+            logger.error(f"Date values before parsing: {df['date'].head()}")
+            logger.error(f"Time values before parsing: {df['time'].head()}")
+            
+            # Clean up date and time values
+            df['date'] = df['date'].str.strip()
+            df['time'] = df['time'].str.strip()
+            # Parse date and time in dd/MMM/yy format
             df['date'] = pd.to_datetime(
                 df['date'] + ' ' + df['time'],
                 format='%d/%b/%y %H:%M:%S',
                 errors='coerce'
             )
+            
+            # Drop the time column since it's now part of datetime
+            df = df.drop('time', axis=1, errors='ignore')
+            
+            logger.error(f"Date values after parsing: {df['date'].head()}")
+            
+            # Check if any dates failed to parse
+            if df['date'].isna().any():
+                bad_dates = df[df['date'].isna()]
+                logger.error("Some dates failed to parse:")
+                logger.error(f"Problem rows:\n{bad_dates}")
+                raise ValueError(f"{df['date'].isna().sum()} dates failed to parse")
         except Exception as e:
             logger.error(f"Error converting date: {str(e)}")
             logger.error(f"Sample date values: {df['date'].head()}")
             logger.error(f"Sample time values: {df['time'].head()}")
             raise ValueError(f"Failed to parse date format in detailed format. Error: {str(e)}")
 
+        # Map columns to standardized names
+        standardized_mapping = {
+            '% date': 'date',
+            '% time': 'time',
+            '% duration': 'duration',
+            '% a number': 'anumber',
+            '% b number': 'bnumber',
+            '% calltype': 'call_type',
+            '% direction': 'direction',
+            '% c number': 'cnumber',
+            '% a imei': 'imei',
+            '% b imei': 'b_imei',
+            '% a imei type': 'imei_type',
+            '% b imei type': 'b_imei_type',
+            '% a imsi': 'imsi',
+            '% b imsi': 'b_imsi',
+            '% a lac/cid': 'lac_ci',
+            '% b lac/cid': 'b_lac_ci',
+            '% a sitename': 'sitename',
+            '% b sitename': 'b_sitename',
+            '% a lat': 'latitude',
+            '% a long': 'longitude',
+            '% b lat': 'b_latitude',
+            '% b long': 'b_longitude'
+        }
+        
+        # Rename columns according to the mapping
+        df = df.rename(columns=standardized_mapping)
+        
         # Keep all relevant columns including B-side data
         keep_columns = [
             'call_type', 'anumber', 'bnumber', 'date', 'duration',
@@ -129,115 +184,77 @@ class CDRProcessor:
     
     @staticmethod
     def process_cdr_file(file_content: bytes, session_id: str, db: Session) -> int:
-        """
-        Processes CDR file and adds it to session
-        
-        Args:
-            file_content: CDR file content in bytes
-            session_id: Session ID to store data
-            db: Database session
-            
-        Returns:
-            Number of records processed
-        """
+        """Processes CDR file and adds it to session"""
         try:
-            # Try pipe-separated first, then comma-separated
+            # Read CSV file
+            logger.error("Reading CSV file")
             try:
-                df = pd.read_csv(io.BytesIO(file_content), sep='|')
-            except:
-                df = pd.read_csv(io.BytesIO(file_content))
+                # Try reading with comma separator first
+                df = pd.read_csv(
+                    io.BytesIO(file_content),
+                    sep=',',
+                    skipinitialspace=True,
+                    encoding='utf-8',
+                    keep_default_na=False,
+                    dtype=str
+                )
+                
+                # If we got only one column, try pipe separator
+                if len(df.columns) == 1:
+                    logger.error("File appears to be pipe-separated, retrying with | separator")
+                    df = pd.read_csv(
+                        io.BytesIO(file_content),
+                        sep='|',
+                        skipinitialspace=True,
+                        encoding='utf-8',
+                        keep_default_na=False,
+                        dtype=str
+                    )
+                
+            except Exception as e:
+                logger.error(f"Error reading CSV: {str(e)}")
+                raise
+            logger.error(f"Read CSV file with shape: {df.shape}")
             
-            # Keep original columns for debugging
-            original_columns = list(df.columns)
-            logger.debug(f"Original columns: {original_columns}")
+            # Clean column names
+            logger.error("Cleaning column names")
+            def clean_column_name(col):
+                col = str(col).lower().strip()
+                # Keep % prefix for initial column mapping
+                if col.startswith('%'):
+                    col = '% ' + col[1:].strip()
+                return col
             
-            # Standardize column names
-            df.columns = [col.lower().strip('% ') for col in df.columns]
-            logger.debug(f"Standardized columns: {list(df.columns)}")
+            df.columns = [clean_column_name(col) for col in df.columns]
+            logger.error(f"Columns after cleaning: {list(df.columns)}")
             
             # Detect and process format
             file_format = CDRProcessor._detect_file_format(df)
-            logger.info(f"Detected file format: {file_format}")
+            logger.error(f"Detected format: {file_format}")
             
+            # Process detailed format
             if file_format == 'detailed':
                 df = CDRProcessor._standardize_detailed_format(df)
-                logger.debug(f"Columns after standardization: {list(df.columns)}")
+                logger.error(f"Standardized columns: {list(df.columns)}")
             
-            # Verify required columns
+            # Verify all required columns exist
             required_columns = ['call_type', 'anumber', 'bnumber', 'date', 'duration']
-            for col in required_columns:
-                if col not in df.columns:
-                    raise ValueError(f"Required column {col} not found in CDR file. Available columns: {list(df.columns)}")
+            missing = [col for col in required_columns if col not in df.columns]
+            if missing:
+                raise ValueError(f"Missing required columns: {', '.join(missing)}")
             
-            # Handle different date formats with improved error handling
-            try:
-                logger.debug("Starting date conversion")
-                logger.debug(f"Current date column values: {df['date'].head()}")
-                
-                if file_format == 'detailed':
-                    if 'time' not in df.columns:
-                        logger.error("Time column missing in detailed format")
-                        logger.error(f"Available columns: {list(df.columns)}")
-                        raise ValueError("Time column missing in detailed format")
-                    
-                    # Try parsing date and time together
-                    for date_format in ['%d/%b/%y', '%d/%b/%Y']:
-                        try:
-                            logger.debug(f"Attempting date format: {date_format}")
-                            df['parsed_date'] = pd.to_datetime(
-                                df['date'].astype(str) + ' ' + df['time'].astype(str),
-                                format=f'{date_format} %H:%M:%S',
-                                errors='raise'
-                            )
-                            df['date'] = df['parsed_date']
-                            df = df.drop(['parsed_date', 'time'], axis=1, errors='ignore')
-                            logger.info(f"Successfully parsed dates using format: {date_format}")
-                            break
-                        except Exception as format_error:
-                            logger.debug(f"Format {date_format} failed: {str(format_error)}")
-                            continue
-                    
-                    # If no format worked, try one last time with flexible parsing
-                    if 'parsed_date' not in df.columns:
-                        logger.warning("Attempting flexible date parsing")
-                        df['date'] = pd.to_datetime(
-                            df['date'].astype(str) + ' ' + df['time'].astype(str),
-                            errors='coerce'
-                        )
-                else:
-                    # For standard format, try multiple patterns
-                    df['date'] = pd.to_datetime(df['date'], errors='coerce')
-                
-                # Validate results
-                if df['date'].isna().any():
-                    bad_dates = df[df['date'].isna()]
-                    logger.error("Some dates failed to parse:")
-                    logger.error(f"Problem rows:\n{bad_dates[['date', 'time'] if 'time' in bad_dates else ['date']].head()}")
-                    raise ValueError(f"{df['date'].isna().sum()} dates failed to parse. Check logs for details.")
-                
-                logger.info("Date conversion completed successfully")
-                logger.debug(f"Sample converted dates:\n{df['date'].head()}")
-                
-            except Exception as e:
-                logger.error(f"Date conversion failed: {str(e)}")
-                if 'date' in df.columns:
-                    logger.error(f"Original date values:\n{df['date'].head()}")
-                if 'time' in df.columns:
-                    logger.error(f"Time values:\n{df['time'].head()}")
-                raise ValueError(f"Date conversion error: {str(e)}")
-            
-            # Convert duration to integer, handle colon format
+            # Process duration
             df['duration'] = df['duration'].astype(str).str.replace(':', '')
             df['duration'] = pd.to_numeric(df['duration'], errors='coerce').fillna(0).astype(int)
-
-            # Filter out invalid B numbers for both formats
+            
+            # Filter invalid B numbers
             df = CDRProcessor._filter_invalid_bnumbers(df)
             
             # Add data to session
             session_manager = get_session_manager()
             record_count = session_manager.add_cdr_data(db, session_id, df)
             
-            logger.info(f"Processed {record_count} CDR records for session {session_id}")
+            logger.info(f"Successfully processed {record_count} records")
             return record_count
             
         except Exception as e:
